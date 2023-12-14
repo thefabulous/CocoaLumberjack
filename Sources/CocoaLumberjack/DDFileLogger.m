@@ -53,6 +53,23 @@ unsigned long long const kDDDefaultLogFilesDiskQuota   = 20 * 1024 * 1024; // 20
 
 NSTimeInterval     const kDDRollingLeeway              = 1.0;              // 1s
 
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+#pragma mark -
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+@implementation DDFileLogPlainTextMessageSerializer
+
+- (instancetype)init {
+    return [super init];
+}
+
+- (NSData *)dataForString:(NSString *)string originatingFromMessage:(DDLogMessage *)message {
+    return [string dataUsingEncoding:NSUTF8StringEncoding] ?: [NSData data];
+}
+
+@end
+
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 #pragma mark -
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -73,6 +90,7 @@ NSTimeInterval     const kDDRollingLeeway              = 1.0;              // 1s
 
 @synthesize maximumNumberOfLogFiles = _maximumNumberOfLogFiles;
 @synthesize logFilesDiskQuota = _logFilesDiskQuota;
+@synthesize logMessageSerializer = _logMessageSerializer;
 
 - (instancetype)init {
     return [self initWithLogsDirectory:nil];
@@ -93,6 +111,8 @@ NSTimeInterval     const kDDRollingLeeway              = 1.0;              // 1s
         } else {
             _logsDirectory = [[self defaultLogsDirectory] copy];
         }
+
+        _logMessageSerializer = [[DDFileLogPlainTextMessageSerializer alloc] init];
 
         NSLogVerbose(@"DDFileLogManagerDefault: logsDirectory:\n%@", [self logsDirectory]);
         NSLogVerbose(@"DDFileLogManagerDefault: sortedLogFileNames:\n%@", [self sortedLogFileNames]);
@@ -430,7 +450,7 @@ NSTimeInterval     const kDDRollingLeeway              = 1.0;              // 1s
         fileHeaderStr = [fileHeaderStr stringByAppendingString:@"\n"];
     }
 
-    return [fileHeaderStr dataUsingEncoding:NSUTF8StringEncoding];
+    return [_logMessageSerializer dataForString:fileHeaderStr originatingFromMessage:nil];
 }
 
 - (NSString *)createNewLogFileWithError:(NSError *__autoreleasing  _Nullable *)error {
@@ -624,7 +644,7 @@ NSTimeInterval     const kDDRollingLeeway              = 1.0;              // 1s
 }
 
 - (void)lt_cleanup {
-    NSAssert([self isOnInternalLoggerQueue], @"lt_ methods should be on logger queue.");
+    DDAbstractLoggerAssertOnInternalLoggerQueue();
 
     if (_currentLogFileHandle != nil) {
         if (@available(macOS 10.15, iOS 13.0, tvOS 13.0, watchOS 6.0, *)) {
@@ -690,12 +710,9 @@ NSTimeInterval     const kDDRollingLeeway              = 1.0;              // 1s
     // This is the intended result. Fix it by accessing the ivar directly.
     // Great strides have been take to ensure this is safe to do. Plus it's MUCH faster.
 
-    NSAssert(![self isOnGlobalLoggingQueue], @"Core architecture requirement failure");
-    NSAssert(![self isOnInternalLoggerQueue], @"MUST access ivar directly, NOT via self.* syntax.");
+    DDAbstractLoggerAssertLockedPropertyAccess();
 
-    dispatch_queue_t globalLoggingQueue = [DDLog loggingQueue];
-
-    dispatch_sync(globalLoggingQueue, ^{
+    dispatch_sync([DDLog loggingQueue], ^{
         dispatch_sync(self.loggerQueue, block);
     });
 
@@ -722,12 +739,9 @@ NSTimeInterval     const kDDRollingLeeway              = 1.0;              // 1s
     // This is the intended result. Fix it by accessing the ivar directly.
     // Great strides have been take to ensure this is safe to do. Plus it's MUCH faster.
 
-    NSAssert(![self isOnGlobalLoggingQueue], @"Core architecture requirement failure");
-    NSAssert(![self isOnInternalLoggerQueue], @"MUST access ivar directly, NOT via self.* syntax.");
+    DDAbstractLoggerAssertLockedPropertyAccess();
 
-    dispatch_queue_t globalLoggingQueue = [DDLog loggingQueue];
-
-    dispatch_async(globalLoggingQueue, ^{
+    dispatch_async([DDLog loggingQueue], ^{
         dispatch_async(self.loggerQueue, block);
     });
 }
@@ -749,12 +763,9 @@ NSTimeInterval     const kDDRollingLeeway              = 1.0;              // 1s
     // This is the intended result. Fix it by accessing the ivar directly.
     // Great strides have been take to ensure this is safe to do. Plus it's MUCH faster.
 
-    NSAssert(![self isOnGlobalLoggingQueue], @"Core architecture requirement failure");
-    NSAssert(![self isOnInternalLoggerQueue], @"MUST access ivar directly, NOT via self.* syntax.");
+    DDAbstractLoggerAssertLockedPropertyAccess();
 
-    dispatch_queue_t globalLoggingQueue = [DDLog loggingQueue];
-
-    dispatch_sync(globalLoggingQueue, ^{
+    dispatch_sync([DDLog loggingQueue], ^{
         dispatch_sync(self.loggerQueue, block);
     });
 
@@ -781,12 +792,9 @@ NSTimeInterval     const kDDRollingLeeway              = 1.0;              // 1s
     // This is the intended result. Fix it by accessing the ivar directly.
     // Great strides have been take to ensure this is safe to do. Plus it's MUCH faster.
 
-    NSAssert(![self isOnGlobalLoggingQueue], @"Core architecture requirement failure");
-    NSAssert(![self isOnInternalLoggerQueue], @"MUST access ivar directly, NOT via self.* syntax.");
+    DDAbstractLoggerAssertLockedPropertyAccess();
 
-    dispatch_queue_t globalLoggingQueue = [DDLog loggingQueue];
-
-    dispatch_async(globalLoggingQueue, ^{
+    dispatch_async([DDLog loggingQueue], ^{
         dispatch_async(self.loggerQueue, block);
     });
 }
@@ -796,7 +804,7 @@ NSTimeInterval     const kDDRollingLeeway              = 1.0;              // 1s
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 - (void)lt_scheduleTimerToRollLogFileDueToAge {
-    NSAssert([self isOnInternalLoggerQueue], @"lt_ methods should be on logger queue.");
+    DDAbstractLoggerAssertOnInternalLoggerQueue();
 
     if (_rollingTimer) {
         dispatch_source_cancel(_rollingTimer);
@@ -823,12 +831,12 @@ NSTimeInterval     const kDDRollingLeeway              = 1.0;              // 1s
         [weakSelf lt_maybeRollLogFileDueToAge];
     } });
 
-    #if !OS_OBJECT_USE_OBJC
+#if !OS_OBJECT_USE_OBJC
     dispatch_source_t theRollingTimer = _rollingTimer;
     dispatch_source_set_cancel_handler(_rollingTimer, ^{
         dispatch_release(theRollingTimer);
     });
-    #endif
+#endif
 
     static NSTimeInterval const kDDMaxTimerDelay = LLONG_MAX / NSEC_PER_SEC;
     int64_t delay = (int64_t)(MIN([logFileRollingDate timeIntervalSinceNow], kDDMaxTimerDelay) * (NSTimeInterval) NSEC_PER_SEC);
@@ -864,18 +872,16 @@ NSTimeInterval     const kDDRollingLeeway              = 1.0;              // 1s
     if ([self isOnInternalLoggerQueue]) {
         block();
     } else {
-        dispatch_queue_t globalLoggingQueue = [DDLog loggingQueue];
-        NSAssert(![self isOnGlobalLoggingQueue], @"Core architecture requirement failure");
-
-        dispatch_async(globalLoggingQueue, ^{
+        DDAbstractLoggerAssertNotOnGlobalLoggingQueue();
+        dispatch_async([DDLog loggingQueue], ^{
             dispatch_async(self.loggerQueue, block);
         });
     }
 }
 
 - (void)lt_rollLogFileNow {
-    NSAssert([self isOnInternalLoggerQueue], @"lt_ methods should be on logger queue.");
-    NSLogVerbose(@"DDFileLogger: rollLogFileNow");
+    DDAbstractLoggerAssertOnInternalLoggerQueue();
+    NSLogVerbose(@"DDFileLogger: %@", NSStringFromSelector(_cmd));
 
     if (_currentLogFileHandle == nil) {
         return;
@@ -938,7 +944,7 @@ NSTimeInterval     const kDDRollingLeeway              = 1.0;              // 1s
 }
 
 - (void)lt_maybeRollLogFileDueToAge {
-    NSAssert([self isOnInternalLoggerQueue], @"lt_ methods should be on logger queue.");
+    DDAbstractLoggerAssertOnInternalLoggerQueue();
 
     if (_rollingFrequency > 0.0 && (_currentLogFileInfo.age + kDDRollingLeeway) >= _rollingFrequency) {
         NSLogVerbose(@"DDFileLogger: Rolling log file due to age...");
@@ -949,7 +955,7 @@ NSTimeInterval     const kDDRollingLeeway              = 1.0;              // 1s
 }
 
 - (void)lt_maybeRollLogFileDueToSize {
-    NSAssert([self isOnInternalLoggerQueue], @"lt_ methods should be on logger queue.");
+    DDAbstractLoggerAssertOnInternalLoggerQueue();
 
     // This method is called from logMessage.
     // Keep it FAST.
@@ -983,7 +989,7 @@ NSTimeInterval     const kDDRollingLeeway              = 1.0;              // 1s
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 - (BOOL)lt_shouldLogFileBeArchived:(DDLogFileInfo *)mostRecentLogFileInfo {
-    NSAssert([self isOnInternalLoggerQueue], @"lt_ methods should be on logger queue.");
+    DDAbstractLoggerAssertOnInternalLoggerQueue();
 
     if ([self shouldArchiveRecentLogFileInfo:mostRecentLogFileInfo]) {
         return YES;
@@ -1030,17 +1036,14 @@ NSTimeInterval     const kDDRollingLeeway              = 1.0;              // 1s
     // For extensive documentation please refer to the DDAbstractLogger implementation.
     // Do not access this method on any Lumberjack queue, will deadlock.
 
-    NSAssert(![self isOnGlobalLoggingQueue], @"Core architecture requirement failure");
-    NSAssert(![self isOnInternalLoggerQueue], @"MUST access ivar directly, NOT via self.* syntax.");
+    DDAbstractLoggerAssertLockedPropertyAccess();
 
     __block DDLogFileInfo *info = nil;
     dispatch_block_t block = ^{
         info = [self lt_currentLogFileInfo];
     };
 
-    dispatch_queue_t globalLoggingQueue = [DDLog loggingQueue];
-
-    dispatch_sync(globalLoggingQueue, ^{
+    dispatch_sync([DDLog loggingQueue], ^{
         dispatch_sync(self->_loggerQueue, block);
     });
 
@@ -1048,7 +1051,7 @@ NSTimeInterval     const kDDRollingLeeway              = 1.0;              // 1s
 }
 
 - (DDLogFileInfo *)lt_currentLogFileInfo {
-    NSAssert([self isOnInternalLoggerQueue], @"lt_ methods should be on logger queue.");
+    DDAbstractLoggerAssertOnInternalLoggerQueue();
 
     // Get the current log file info ivar (might be nil).
     DDLogFileInfo *newCurrentLogFile = _currentLogFileInfo;
@@ -1093,8 +1096,8 @@ NSTimeInterval     const kDDRollingLeeway              = 1.0;              // 1s
 }
 
 - (BOOL)lt_shouldUseLogFile:(nonnull DDLogFileInfo *)logFileInfo isResuming:(BOOL)isResuming {
-    NSAssert([self isOnInternalLoggerQueue], @"lt_ methods should be on logger queue.");
     NSParameterAssert(logFileInfo);
+    DDAbstractLoggerAssertOnInternalLoggerQueue();
 
     // Check if the log file is archived. We must not use archived log files.
     if (logFileInfo.isArchived) {
@@ -1137,7 +1140,7 @@ NSTimeInterval     const kDDRollingLeeway              = 1.0;              // 1s
 }
 
 - (void)lt_monitorCurrentLogFileForExternalChanges {
-    NSAssert([self isOnInternalLoggerQueue], @"lt_ methods should be on logger queue.");
+    DDAbstractLoggerAssertOnInternalLoggerQueue();
     NSAssert(_currentLogFileHandle, @"Can not monitor without handle.");
 
     // This seems to work around crashes when an active source is replaced / released.
@@ -1169,7 +1172,7 @@ NSTimeInterval     const kDDRollingLeeway              = 1.0;              // 1s
 }
 
 - (NSFileHandle *)lt_currentLogFileHandle {
-    NSAssert([self isOnInternalLoggerQueue], @"lt_ methods should be on logger queue.");
+    DDAbstractLoggerAssertOnInternalLoggerQueue();
 
     if (_currentLogFileHandle == nil) {
         NSString *logFilePath = [[self lt_currentLogFileInfo] filePath];
@@ -1240,17 +1243,15 @@ static int exception_count = 0;
     if ([self isOnInternalLoggerQueue]) {
         block();
     } else {
-        dispatch_queue_t globalLoggingQueue = [DDLog loggingQueue];
-        NSAssert(![self isOnGlobalLoggingQueue], @"Core architecture requirement failure");
-
-        dispatch_sync(globalLoggingQueue, ^{
+        DDAbstractLoggerAssertNotOnGlobalLoggingQueue();
+        dispatch_sync([DDLog loggingQueue], ^{
             dispatch_sync(self.loggerQueue, block);
         });
     }
 }
 
 - (void)lt_flush {
-    NSAssert([self isOnInternalLoggerQueue], @"flush should only be executed on internal queue.");
+    DDAbstractLoggerAssertOnInternalLoggerQueue();
     
     if (_currentLogFileHandle != nil) {
         if (@available(macOS 10.15, iOS 13.0, tvOS 13.0, watchOS 6.0, *)) {
@@ -1293,10 +1294,8 @@ static int exception_count = 0;
     if ([self isOnInternalLoggerQueue]) {
         block();
     } else {
-        dispatch_queue_t globalLoggingQueue = [DDLog loggingQueue];
-        NSAssert(![self isOnGlobalLoggingQueue], @"Core architecture requirement failure");
-
-        dispatch_sync(globalLoggingQueue, ^{
+        DDAbstractLoggerAssertNotOnGlobalLoggingQueue();
+        dispatch_sync([DDLog loggingQueue], ^{
             dispatch_sync(self.loggerQueue, block);
         });
     }
@@ -1329,7 +1328,7 @@ static int exception_count = 0;
         implementsDeprecatedDidLog = [self respondsToSelector:@selector(didLogMessage)];
     });
 
-    NSAssert([self isOnInternalLoggerQueue], @"logMessage should only be executed on internal queue.");
+    DDAbstractLoggerAssertOnInternalLoggerQueue();
 
     if (data.length == 0) {
         return;
@@ -1392,27 +1391,35 @@ static int exception_count = 0;
     }
 }
 
-- (NSData *)lt_dataForMessage:(DDLogMessage *)logMessage {
-    NSAssert([self isOnInternalLoggerQueue], @"logMessage should only be executed on internal queue.");
+- (id <DDFileLogMessageSerializer>)lt_logFileSerializer {
+    if ([_logFileManager respondsToSelector:@selector(logMessageSerializer)]) {
+        return _logFileManager.logMessageSerializer;
+    } else {
+        return [[DDFileLogPlainTextMessageSerializer alloc] init];
+    }
+}
 
-    NSString *message = logMessage->_message;
-    BOOL isFormatted = NO;
+- (NSData *)lt_dataForMessage:(DDLogMessage *)logMessage {
+    DDAbstractLoggerAssertOnInternalLoggerQueue();
+
+    __auto_type messageString = logMessage->_message;
+    __auto_type isFormatted = NO;
 
     if (_logFormatter != nil) {
-        message = [_logFormatter formatLogMessage:logMessage];
-        isFormatted = message != logMessage->_message;
+        messageString = [_logFormatter formatLogMessage:logMessage];
+        isFormatted = messageString != logMessage->_message;
     }
 
-    if (message.length == 0) {
+    if (messageString.length == 0) {
         return nil;
     }
 
-    BOOL shouldFormat = !isFormatted || _automaticallyAppendNewlineForCustomFormatters;
-    if (shouldFormat && ![message hasSuffix:@"\n"]) {
-        message = [message stringByAppendingString:@"\n"];
+    __auto_type shouldFormat = !isFormatted || _automaticallyAppendNewlineForCustomFormatters;
+    if (shouldFormat && ![messageString hasSuffix:@"\n"]) {
+        messageString = [messageString stringByAppendingString:@"\n"];
     }
 
-    return [message dataUsingEncoding:NSUTF8StringEncoding];
+    return [[self lt_logFileSerializer] dataForString:messageString originatingFromMessage:logMessage];
 }
 
 @end
@@ -1436,12 +1443,9 @@ static NSString * const kDDXAttrArchivedName = @"lumberjack.log.archived";
 }
 
 #if TARGET_IPHONE_SIMULATOR
-
 // Old implementation of extended attributes on the simulator.
-
 - (BOOL)_hasExtensionAttributeWithName:(NSString *)attrName;
 - (void)_removeExtensionAttributeWithName:(NSString *)attrName;
-
 #endif
 
 @end
@@ -1834,9 +1838,7 @@ BOOL doesAppRunInBackground(void) {
     }
 
     BOOL answer = NO;
-
     NSArray *backgroundModes = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"UIBackgroundModes"];
-
     for (NSString *mode in backgroundModes) {
         if (mode.length > 0) {
             answer = YES;
@@ -1846,5 +1848,4 @@ BOOL doesAppRunInBackground(void) {
 
     return answer;
 }
-
 #endif
